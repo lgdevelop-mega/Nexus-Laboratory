@@ -1,0 +1,136 @@
+[project]
+name = "nexus-api"
+version = "0.1.0"
+description = "NEXUS ERP · backend modular con FastAPI"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.165",
+    "uvicorn[standard]>=0.54",
+    "pydantic>=2.14",
+    "pydantic-settings>=2.16",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "asyncmy>=0.2.18",
+    # D-11: asyncmy lo necesita para caching_sha2_password (MySQL 8.4) sin TLS.
+    "cryptography>=50.0",
+    "alembic>=1.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2",
+    "pytest-asyncio>=1.5",
+    "httpx>=0.28.1",
+    "ruff>=0.17.6",
+    "mypy>=2.4",
+    "import-linter>=2.17",
+]
+
+[tool.uv]
+# Aplicación, no librería: no se construye ni se instala como paquete.
+package = false
+
+# --- Calidad -----------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic/versions", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+
+# Estricto en la base, el dominio y la aplicación (login-02-base §4.9).
+[[tool.mypy.overrides]]
+module = [
+    "app.main",
+    "app.bootstrap",
+    "app.core.*",
+    "app.identity.login.domain.*",
+    "app.identity.login.application.*",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+warn_return_any = true
+no_implicit_reexport = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+
+# --- Pruebas -----------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+# --- Regla de importación entre capas (CLAUDE.md) -----------------------------
+
+[tool.importlinter]
+root_packages = ["app"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Login: capas api -> application -> domain"
+type = "layers"
+layers = [
+    "app.identity.login.api",
+    "app.identity.login.application",
+    "app.identity.login.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Login: el dominio es Python puro"
+type = "forbidden"
+source_modules = ["app.identity.login.domain"]
+forbidden_modules = [
+    "fastapi",
+    "starlette",
+    "sqlalchemy",
+    "pydantic",
+    "httpx",
+    "app.core",
+    "app.bootstrap",
+    "app.identity.login.application",
+    "app.identity.login.api",
+    "app.identity.login.infrastructure",
+]
+
+[[tool.importlinter.contracts]]
+name = "Login: la aplicación no depende de HTTP, ORM ni adaptadores"
+type = "forbidden"
+source_modules = ["app.identity.login.application"]
+forbidden_modules = [
+    "fastapi",
+    "starlette",
+    "sqlalchemy",
+    "httpx",
+    "app.bootstrap",
+    "app.identity.login.api",
+    "app.identity.login.infrastructure",
+]
+
+[[tool.importlinter.contracts]]
+name = "Login: la API no importa adaptadores (solo app.bootstrap los conecta)"
+type = "forbidden"
+source_modules = ["app.identity.login.api"]
+forbidden_modules = ["app.identity.login.infrastructure"]
