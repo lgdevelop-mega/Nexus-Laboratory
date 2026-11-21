@@ -6,8 +6,6 @@ from app.core.lifespan import lifespan
 
 load_dotenv()  # Load environment variables from .env file
 
-BASE_DIR = Path(__file__).resolve().parentexi
-
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
