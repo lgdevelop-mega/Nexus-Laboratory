@@ -25,5 +25,6 @@ Cuando haya conector, o si el responsable las sube a mano:
 | `login-02-base` | [v2](login-02-base-v2.md) | Implementado, pendiente de revisión | 2026-11-20 | No |
 | `login-04-migracion` | [v1](login-04-migracion-v1.md) | Aprobada | 2026-11-20 | No |
 | `login-04-migracion` | [v2](login-04-migracion-v2.md) | Implementado, pendiente de revisión | 2026-11-20 | No |
+| `login-04-migracion` | [v3](login-04-migracion-v3.md) | Implementado, pendiente de revisión (R2) | 2026-11-23 | No |
 
 `login-01` fue anterior a esta instrucción y no tiene nota de Notion. La reemplaza en parte el ER v2 (ver `login-02-base` v1, sección 2).

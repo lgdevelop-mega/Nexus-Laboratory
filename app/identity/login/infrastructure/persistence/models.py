@@ -1,12 +1,22 @@
-"""
+"""Modelos de persistencia de Login (login-04-migracion, revisión R2).
+
+Especificación: ``docs/agents/herdr-login-04-r2-migraciones.md``, sección 4.
+
+- Estados, tipos de dispositivo y motivos de revocación son catálogos con FK, no ENUM
+  (R2-04, R2-05).
+- Sin áreas, países, ciudades, roles ni SSO (R2-01 a R2-03).
+- Las FK hacia catálogos no tienen ``server_default``: la aplicación resuelve el ``id`` por
+  ``name`` y siempre lo envía.
+
 Los nombres de PK, UK, FK y CHECK los produce ``NAMING_CONVENTION`` (``app/core/db.py``).
-Los modelos no tienen relaciones ORM ni lógica, y no salen de ``infrastructure/``.
+Cada FK simple hacia un catálogo tiene un ``Index`` explícito para que MySQL no cree uno
+con el nombre de la FK (sección 4.10). Los modelos no tienen relaciones ORM ni lógica, y
+no salen de ``infrastructure/``.
 """
 
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     CheckConstraint,
     ForeignKey,
     ForeignKeyConstraint,
@@ -14,7 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.mysql import BIGINT, BINARY, DATETIME, ENUM, VARCHAR
+from sqlalchemy.dialects.mysql import BIGINT, BINARY, DATETIME, VARCHAR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -34,19 +44,51 @@ MYSQL_TABLE_OPTIONS = {
     "mysql_collate": "utf8mb4_0900_ai_ci",
 }
 
-USER_STATUSES = ("active", "suspended")
-ENTERPRISE_STATUSES = ("active", "inactive")
-MEMBERSHIP_STATUSES = ("active", "suspended", "revoked")
-AUTH_METHODS = ("password", "sso")
-DEVICE_TYPES = ("desktop", "mobile", "tablet", "unknown")
-REVOKED_REASONS = (
-    "logout",
-    "switched",
-    "user_suspended",
-    "membership_revoked",
-    "enterprise_disabled",
-    "admin",
-)
+
+def _restrict(target: str) -> ForeignKey:
+    return ForeignKey(target, ondelete="RESTRICT")
+
+
+# --- Catálogos (R2-04, R2-05, R2-06) ----------------------------------------------
+
+
+class StatusModel(Base):
+    """Estados ``active`` / ``inactive`` de usuarios, empresas y membresías."""
+
+    __tablename__ = "statuses"
+    __table_args__ = (UniqueConstraint("name"), MYSQL_TABLE_OPTIONS)
+
+    id: Mapped[int] = mapped_column(ID, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(TEXT_255)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=UPDATED_DEFAULT)
+
+
+class DeviceTypeModel(Base):
+    """Tipo de dispositivo de una sesión. Solo informativo: nunca se usa para autorizar."""
+
+    __tablename__ = "device_types"
+    __table_args__ = (UniqueConstraint("name"), MYSQL_TABLE_OPTIONS)
+
+    id: Mapped[int] = mapped_column(ID, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(TEXT_255)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=UPDATED_DEFAULT)
+
+
+class RevokedReasonModel(Base):
+    """Motivo de revocación de una sesión (LOG-14, LOG-16)."""
+
+    __tablename__ = "revoked_reasons"
+    __table_args__ = (UniqueConstraint("name"), MYSQL_TABLE_OPTIONS)
+
+    id: Mapped[int] = mapped_column(ID, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(TEXT_255)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=UPDATED_DEFAULT)
+
+
+# --- Tablas de Login ------------------------------------------------------------------
 
 
 class UserModel(Base):
@@ -56,32 +98,30 @@ class UserModel(Base):
     __table_args__ = (
         UniqueConstraint("email"),
         CheckConstraint("email = LOWER(TRIM(email))", name="email_normalized"),  # M-5
-        Index("ix_users_area_id", "area_id"),
+        Index("ix_users_status_id", "status_id"),
         MYSQL_TABLE_OPTIONS,
     )
 
     id: Mapped[int] = mapped_column(ID, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(EMAIL)
-    password_hash: Mapped[str | None] = mapped_column(TEXT_255)
-    status: Mapped[str] = mapped_column(ENUM(*USER_STATUSES), server_default=text("'active'"))
+    password_hash: Mapped[str | None] = mapped_column(TEXT_255)  # R2-07: NULL permitido
+    status_id: Mapped[int] = mapped_column(ID, _restrict("statuses.id"))
     name: Mapped[str] = mapped_column(TEXT_255)
     second_name: Mapped[str | None] = mapped_column(TEXT_255)
     last_name: Mapped[str] = mapped_column(TEXT_255)
     second_last_name: Mapped[str | None] = mapped_column(TEXT_255)
     phone_wa: Mapped[str | None] = mapped_column(TEXT_255)
-    area_id: Mapped[int | None] = mapped_column(ID)  # M-1: sin FK
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=UPDATED_DEFAULT)
 
 
 class EnterpriseModel(Base):
-    """Empresa y estado operativo (LOG-01, LOG-06, LOG-16)."""
+    """Empresa y estado operativo (LOG-01, LOG-16)."""
 
     __tablename__ = "enterprises"
     __table_args__ = (
         UniqueConstraint("rfc"),
-        Index("ix_enterprises_country_id", "country_id"),
-        Index("ix_enterprises_city_id", "city_id"),
+        Index("ix_enterprises_status_id", "status_id"),
         MYSQL_TABLE_OPTIONS,
     )
 
@@ -93,39 +133,37 @@ class EnterpriseModel(Base):
     contact_name: Mapped[str] = mapped_column(TEXT_255)
     email: Mapped[str] = mapped_column(TEXT_255)
     phone: Mapped[str] = mapped_column(TEXT_255)
-    country_id: Mapped[int] = mapped_column(ID)  # M-1: sin FK
-    city_id: Mapped[int] = mapped_column(ID)  # M-1: sin FK
     full_address: Mapped[str] = mapped_column(TEXT_255)
     postal_code: Mapped[str] = mapped_column(TEXT_255)
-    status: Mapped[str] = mapped_column(
-        ENUM(*ENTERPRISE_STATUSES), server_default=text("'active'")
-    )  # M-2
-    sso_enabled: Mapped[bool] = mapped_column(Boolean(), server_default=text("0"))  # tinyint(1)
+    status_id: Mapped[int] = mapped_column(ID, _restrict("statuses.id"))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=UPDATED_DEFAULT)
 
 
 class MembershipModel(Base):
-    """Membresía usuario-empresa (LOG-02, LOG-05, LOG-07, LOG-09, LOG-15, CA-05)."""
+    """Membresía usuario-empresa (LOG-02, LOG-05, LOG-07, LOG-15, CA-05)."""
 
     __tablename__ = "users_enterprises"
     __table_args__ = (
         UniqueConstraint("user_id", "enterprise_id"),  # una membresía por empresa (CA-05)
         UniqueConstraint("id", "user_id"),  # destino de las FK compuestas
-        Index("ix_users_enterprises_user_id_status_joined_at", "user_id", "status", "joined_at"),
-        Index("ix_users_enterprises_enterprise_id_status", "enterprise_id", "status"),
-        Index("ix_users_enterprises_role_id", "role_id"),
+        Index(
+            "ix_users_enterprises_user_id_status_id_joined_at",
+            "user_id",
+            "status_id",
+            "joined_at",
+        ),  # LOG-05: membresía activa más antigua
+        Index("ix_users_enterprises_enterprise_id_status_id", "enterprise_id", "status_id"),
+        Index("ix_users_enterprises_status_id", "status_id"),  # soporte de la FK
         MYSQL_TABLE_OPTIONS,
     )
 
     id: Mapped[int] = mapped_column(ID, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ID, ForeignKey("users.id", ondelete="RESTRICT"))
-    enterprise_id: Mapped[int] = mapped_column(
-        ID, ForeignKey("enterprises.id", ondelete="RESTRICT")
-    )
-    role_id: Mapped[int] = mapped_column(ID)  # M-1: sin FK
-    status: Mapped[str] = mapped_column(ENUM(*MEMBERSHIP_STATUSES), server_default=text("'active'"))
+    user_id: Mapped[int] = mapped_column(ID, _restrict("users.id"))
+    enterprise_id: Mapped[int] = mapped_column(ID, _restrict("enterprises.id"))
+    status_id: Mapped[int] = mapped_column(ID, _restrict("statuses.id"))
     joined_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
+    # Sin ON UPDATE: lo actualiza la aplicación al cambiar el estado (H-06).
     status_changed_at: Mapped[datetime] = mapped_column(
         TIMESTAMP_MS, server_default=CREATED_DEFAULT
     )
@@ -146,7 +184,7 @@ class UserPreferenceModel(Base):
     )
 
     user_id: Mapped[int] = mapped_column(
-        ID, ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True, autoincrement=False
+        ID, _restrict("users.id"), primary_key=True, autoincrement=False
     )
     default_membership_id: Mapped[int | None] = mapped_column(ID)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=UPDATED_DEFAULT)
@@ -170,8 +208,10 @@ class AuthSessionModel(Base):
             "expires_at",
         ),
         Index("ix_auth_sessions_user_id_revoked_at", "user_id", "revoked_at"),
+        Index("ix_auth_sessions_device_type_id", "device_type_id"),
+        Index("ix_auth_sessions_revoked_reason_id", "revoked_reason_id"),
         CheckConstraint(
-            "(revoked_at IS NULL) = (revoked_reason IS NULL)", name="revocation_consistent"
+            "(revoked_at IS NULL) = (revoked_reason_id IS NULL)", name="revocation_consistent"
         ),
         CheckConstraint("expires_at > created_at", name="expires_after_created"),
         MYSQL_TABLE_OPTIONS,
@@ -179,16 +219,14 @@ class AuthSessionModel(Base):
 
     id: Mapped[bytes] = mapped_column(UUID_BYTES, primary_key=True)  # UUIDv7 desde la app
     token_hash: Mapped[bytes] = mapped_column(BINARY(32))
-    user_id: Mapped[int] = mapped_column(ID, ForeignKey("users.id", ondelete="RESTRICT"))
+    user_id: Mapped[int] = mapped_column(ID, _restrict("users.id"))
     active_membership_id: Mapped[int] = mapped_column(ID)
-    auth_method: Mapped[str] = mapped_column(ENUM(*AUTH_METHODS))
-    # Solo informativo: nunca se usa para autorizar.
-    device_type: Mapped[str] = mapped_column(ENUM(*DEVICE_TYPES), server_default=text("'unknown'"))
+    device_type_id: Mapped[int] = mapped_column(ID, _restrict("device_types.id"))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS, server_default=CREATED_DEFAULT)
     last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP_MS)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP_MS)
     revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP_MS)
-    revoked_reason: Mapped[str | None] = mapped_column(ENUM(*REVOKED_REASONS))
+    revoked_reason_id: Mapped[int | None] = mapped_column(ID, _restrict("revoked_reasons.id"))
 
 
 class PresenceConnectionModel(Base):

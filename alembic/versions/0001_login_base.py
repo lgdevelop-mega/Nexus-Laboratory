@@ -1,23 +1,19 @@
-"""Login base: tablas globales del módulo de Login (login-04-migracion).
+"""Login base: catálogos y tablas globales del módulo de Login (login-04-migracion, R2).
 
 Revision ID: 0001
 Revises:
-Create Date: 2026-11-20
+Create Date: 2026-11-23
 
-Especificación: docs/agents/herdr-login-04-migraciones.md, sección 5. Decisiones aprobadas
-el 2026-11-20:
+Especificación: docs/agents/herdr-login-04-r2-migraciones.md, sección 4. Propuesta aprobada:
+docs/iterations/login-04-migracion/claude-r2.md (R2-01 a R2-08). Sustituye a la 0001 de R1
+(commit e1563c8), que no se aplicó en ninguna base compartida (R2-08).
 
-- M-1: sin FK hacia catálogos aún inexistentes (area_id, country_id, city_id, role_id).
-- M-2: status como ENUM.
-- M-3: enterprise_sso_config se difiere a login-07-sso.
-- M-4: VARCHAR(255).
-- M-5: ck_users_email_normalized.
-
-Generada con autogenerate y revisada a mano:
-
-- Orden de creación según la sección 5.9.
-- downgrade() elimina solo las tablas, en orden inverso. Hacer DROP INDEX antes fallaría
-  en MySQL (error 1553) en los índices que son el único soporte de una FK.
+- Catálogos statuses, device_types y revoked_reasons en lugar de ENUM, con datos iniciales
+  e id explícito. Las filas están definidas aquí, no se importan de app/.
+- Sin áreas, países, ciudades, roles ni SSO.
+- Sin server_default en las FK hacia catálogos: la aplicación siempre envía el id.
+- downgrade() elimina solo las tablas, en orden inverso. Hacer DROP INDEX antes fallaría en
+  MySQL (error 1553) en los índices que son el único soporte de una FK.
 """
 
 from collections.abc import Sequence
@@ -44,36 +40,73 @@ TIMESTAMP_MS = mysql.DATETIME(fsp=3)
 CREATED_DEFAULT = sa.text("CURRENT_TIMESTAMP(3)")
 UPDATED_DEFAULT = sa.text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")
 
+# Datos iniciales (sección 4.2). El código resuelve por name; el id fijo da el mismo
+# resultado en todos los entornos.
+STATUSES = [(1, "active"), (2, "inactive")]
+DEVICE_TYPES = [(1, "unknown"), (2, "desktop"), (3, "mobile"), (4, "tablet")]
+REVOKED_REASONS = [
+    (1, "logout"),
+    (2, "switched"),
+    (3, "user_inactive"),
+    (4, "membership_inactive"),
+    (5, "enterprise_inactive"),
+    (6, "admin"),
+]
+
+
+def _restrict_fk(table: str, column: str, target: str) -> sa.ForeignKeyConstraint:
+    return sa.ForeignKeyConstraint(
+        [column],
+        [f"{target}.id"],
+        name=op.f(f"fk_{table}_{column}_{target}"),
+        ondelete="RESTRICT",
+    )
+
+
+def _create_catalog(table: str, rows: list[tuple[int, str]]) -> None:
+    op.create_table(
+        table,
+        sa.Column("id", ID, autoincrement=True, nullable=False),
+        sa.Column("name", VARCHAR_255, nullable=False),
+        sa.Column("created_at", TIMESTAMP_MS, server_default=CREATED_DEFAULT, nullable=False),
+        sa.Column("updated_at", TIMESTAMP_MS, server_default=UPDATED_DEFAULT, nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f(f"pk_{table}")),
+        sa.UniqueConstraint("name", name=op.f(f"uq_{table}_name")),
+        **TABLE_OPTIONS,
+    )
+    rows_table = sa.table(table, sa.column("id", ID), sa.column("name", VARCHAR_255))
+    op.bulk_insert(rows_table, [{"id": row_id, "name": name} for row_id, name in rows])
+
 
 def upgrade() -> None:
+    # Catálogos con datos iniciales (R2-04, R2-05, R2-06)
+    _create_catalog("statuses", STATUSES)
+    _create_catalog("device_types", DEVICE_TYPES)
+    _create_catalog("revoked_reasons", REVOKED_REASONS)
+
     # users: identidad global (LOG-07, LOG-08, LOG-15)
     op.create_table(
         "users",
         sa.Column("id", ID, autoincrement=True, nullable=False),
         sa.Column("email", mysql.VARCHAR(length=255, collation="utf8mb4_bin"), nullable=False),
         sa.Column("password_hash", VARCHAR_255, nullable=True),
-        sa.Column(
-            "status",
-            mysql.ENUM("active", "suspended"),
-            server_default=sa.text("'active'"),
-            nullable=False,
-        ),
+        sa.Column("status_id", ID, nullable=False),
         sa.Column("name", VARCHAR_255, nullable=False),
         sa.Column("second_name", VARCHAR_255, nullable=True),
         sa.Column("last_name", VARCHAR_255, nullable=False),
         sa.Column("second_last_name", VARCHAR_255, nullable=True),
         sa.Column("phone_wa", VARCHAR_255, nullable=True),
-        sa.Column("area_id", ID, nullable=True),
         sa.Column("created_at", TIMESTAMP_MS, server_default=CREATED_DEFAULT, nullable=False),
         sa.Column("updated_at", TIMESTAMP_MS, server_default=UPDATED_DEFAULT, nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
         sa.UniqueConstraint("email", name=op.f("uq_users_email")),
+        _restrict_fk("users", "status_id", "statuses"),
         sa.CheckConstraint("email = LOWER(TRIM(email))", name=op.f("ck_users_email_normalized")),
         **TABLE_OPTIONS,
     )
-    op.create_index("ix_users_area_id", "users", ["area_id"])
+    op.create_index("ix_users_status_id", "users", ["status_id"])
 
-    # enterprises: empresa y estado operativo (LOG-01, LOG-06, LOG-16)
+    # enterprises: empresa y estado operativo (LOG-01, LOG-16)
     op.create_table(
         "enterprises",
         sa.Column("id", ID, autoincrement=True, nullable=False),
@@ -84,41 +117,25 @@ def upgrade() -> None:
         sa.Column("contact_name", VARCHAR_255, nullable=False),
         sa.Column("email", VARCHAR_255, nullable=False),
         sa.Column("phone", VARCHAR_255, nullable=False),
-        sa.Column("country_id", ID, nullable=False),
-        sa.Column("city_id", ID, nullable=False),
         sa.Column("full_address", VARCHAR_255, nullable=False),
         sa.Column("postal_code", VARCHAR_255, nullable=False),
-        sa.Column(
-            "status",
-            mysql.ENUM("active", "inactive"),
-            server_default=sa.text("'active'"),
-            nullable=False,
-        ),
-        sa.Column(
-            "sso_enabled", sa.Boolean(), server_default=sa.text("0"), nullable=False
-        ),
+        sa.Column("status_id", ID, nullable=False),
         sa.Column("created_at", TIMESTAMP_MS, server_default=CREATED_DEFAULT, nullable=False),
         sa.Column("updated_at", TIMESTAMP_MS, server_default=UPDATED_DEFAULT, nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_enterprises")),
         sa.UniqueConstraint("rfc", name=op.f("uq_enterprises_rfc")),
+        _restrict_fk("enterprises", "status_id", "statuses"),
         **TABLE_OPTIONS,
     )
-    op.create_index("ix_enterprises_country_id", "enterprises", ["country_id"])
-    op.create_index("ix_enterprises_city_id", "enterprises", ["city_id"])
+    op.create_index("ix_enterprises_status_id", "enterprises", ["status_id"])
 
-    # users_enterprises: membresías (LOG-02, LOG-05, LOG-07, LOG-09, LOG-15, CA-05)
+    # users_enterprises: membresías (LOG-02, LOG-05, LOG-07, LOG-15, CA-05)
     op.create_table(
         "users_enterprises",
         sa.Column("id", ID, autoincrement=True, nullable=False),
         sa.Column("user_id", ID, nullable=False),
         sa.Column("enterprise_id", ID, nullable=False),
-        sa.Column("role_id", ID, nullable=False),
-        sa.Column(
-            "status",
-            mysql.ENUM("active", "suspended", "revoked"),
-            server_default=sa.text("'active'"),
-            nullable=False,
-        ),
+        sa.Column("status_id", ID, nullable=False),
         sa.Column("joined_at", TIMESTAMP_MS, server_default=CREATED_DEFAULT, nullable=False),
         sa.Column(
             "status_changed_at", TIMESTAMP_MS, server_default=CREATED_DEFAULT, nullable=False
@@ -128,29 +145,22 @@ def upgrade() -> None:
             "user_id", "enterprise_id", name=op.f("uq_users_enterprises_user_id_enterprise_id")
         ),
         sa.UniqueConstraint("id", "user_id", name=op.f("uq_users_enterprises_id_user_id")),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["users.id"],
-            name=op.f("fk_users_enterprises_user_id_users"),
-            ondelete="RESTRICT",
-        ),
-        sa.ForeignKeyConstraint(
-            ["enterprise_id"],
-            ["enterprises.id"],
-            name=op.f("fk_users_enterprises_enterprise_id_enterprises"),
-            ondelete="RESTRICT",
-        ),
+        _restrict_fk("users_enterprises", "user_id", "users"),
+        _restrict_fk("users_enterprises", "enterprise_id", "enterprises"),
+        _restrict_fk("users_enterprises", "status_id", "statuses"),
         **TABLE_OPTIONS,
     )
     op.create_index(
-        "ix_users_enterprises_user_id_status_joined_at",
+        "ix_users_enterprises_user_id_status_id_joined_at",
         "users_enterprises",
-        ["user_id", "status", "joined_at"],
+        ["user_id", "status_id", "joined_at"],
     )
     op.create_index(
-        "ix_users_enterprises_enterprise_id_status", "users_enterprises", ["enterprise_id", "status"]
+        "ix_users_enterprises_enterprise_id_status_id",
+        "users_enterprises",
+        ["enterprise_id", "status_id"],
     )
-    op.create_index("ix_users_enterprises_role_id", "users_enterprises", ["role_id"])
+    op.create_index("ix_users_enterprises_status_id", "users_enterprises", ["status_id"])
 
     # user_preferences: empresa predeterminada (LOG-04, LOG-05)
     op.create_table(
@@ -159,12 +169,7 @@ def upgrade() -> None:
         sa.Column("default_membership_id", ID, nullable=True),
         sa.Column("updated_at", TIMESTAMP_MS, server_default=UPDATED_DEFAULT, nullable=False),
         sa.PrimaryKeyConstraint("user_id", name=op.f("pk_user_preferences")),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["users.id"],
-            name=op.f("fk_user_preferences_user_id_users"),
-            ondelete="RESTRICT",
-        ),
+        _restrict_fk("user_preferences", "user_id", "users"),
         sa.ForeignKeyConstraint(
             ["default_membership_id", "user_id"],
             ["users_enterprises.id", "users_enterprises.user_id"],
@@ -181,45 +186,25 @@ def upgrade() -> None:
         sa.Column("token_hash", sa.BINARY(length=32), nullable=False),
         sa.Column("user_id", ID, nullable=False),
         sa.Column("active_membership_id", ID, nullable=False),
-        sa.Column("auth_method", mysql.ENUM("password", "sso"), nullable=False),
-        sa.Column(
-            "device_type",
-            mysql.ENUM("desktop", "mobile", "tablet", "unknown"),
-            server_default=sa.text("'unknown'"),
-            nullable=False,
-        ),
+        sa.Column("device_type_id", ID, nullable=False),
         sa.Column("created_at", TIMESTAMP_MS, server_default=CREATED_DEFAULT, nullable=False),
         sa.Column("last_used_at", TIMESTAMP_MS, nullable=True),
         sa.Column("expires_at", TIMESTAMP_MS, nullable=False),
         sa.Column("revoked_at", TIMESTAMP_MS, nullable=True),
-        sa.Column(
-            "revoked_reason",
-            mysql.ENUM(
-                "logout",
-                "switched",
-                "user_suspended",
-                "membership_revoked",
-                "enterprise_disabled",
-                "admin",
-            ),
-            nullable=True,
-        ),
+        sa.Column("revoked_reason_id", ID, nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_auth_sessions")),
         sa.UniqueConstraint("token_hash", name=op.f("uq_auth_sessions_token_hash")),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["users.id"],
-            name=op.f("fk_auth_sessions_user_id_users"),
-            ondelete="RESTRICT",
-        ),
+        _restrict_fk("auth_sessions", "user_id", "users"),
         sa.ForeignKeyConstraint(
             ["active_membership_id", "user_id"],
             ["users_enterprises.id", "users_enterprises.user_id"],
             name=op.f("fk_auth_sessions_active_membership_id_users_enterprises"),
             ondelete="RESTRICT",
         ),
+        _restrict_fk("auth_sessions", "device_type_id", "device_types"),
+        _restrict_fk("auth_sessions", "revoked_reason_id", "revoked_reasons"),
         sa.CheckConstraint(
-            "(revoked_at IS NULL) = (revoked_reason IS NULL)",
+            "(revoked_at IS NULL) = (revoked_reason_id IS NULL)",
             name=op.f("ck_auth_sessions_revocation_consistent"),
         ),
         sa.CheckConstraint(
@@ -233,6 +218,8 @@ def upgrade() -> None:
         ["active_membership_id", "revoked_at", "expires_at"],
     )
     op.create_index("ix_auth_sessions_user_id_revoked_at", "auth_sessions", ["user_id", "revoked_at"])
+    op.create_index("ix_auth_sessions_device_type_id", "auth_sessions", ["device_type_id"])
+    op.create_index("ix_auth_sessions_revoked_reason_id", "auth_sessions", ["revoked_reason_id"])
 
     # presence_connections: una fila por WebSocket (CU-07 a CU-10)
     op.create_table(
@@ -264,10 +251,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Orden inverso. DROP TABLE elimina también los índices y las FK de cada tabla.
+    # Orden inverso. DROP TABLE elimina también índices, FK y datos de catálogo.
     op.drop_table("presence_connections")
     op.drop_table("auth_sessions")
     op.drop_table("user_preferences")
     op.drop_table("users_enterprises")
     op.drop_table("enterprises")
     op.drop_table("users")
+    op.drop_table("revoked_reasons")
+    op.drop_table("device_types")
+    op.drop_table("statuses")
