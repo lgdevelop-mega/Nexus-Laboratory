@@ -34,6 +34,9 @@ class Settings(BaseSettings):
 
     docs_enabled: bool = True
 
+    # L-03 (login-05, D-03): vigencia absoluta del token de sesión.
+    session_ttl_hours: int = Field(default=12, ge=1, le=168)
+
     @field_validator("database_url")
     @classmethod
     def _require_asyncmy(cls, value: SecretStr) -> SecretStr:

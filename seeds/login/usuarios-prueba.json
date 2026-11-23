@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "enterprises": [
+    {
+      "key": "saga",
+      "trade_name": "Saga",
+      "company_name": "Saga Pruebas S.A. de C.V.",
+      "rfc": "SPR010101AA1",
+      "contact_name": "Contacto Saga",
+      "email": "contacto@saga.test",
+      "phone": "5500000001",
+      "full_address": "Calle Ficticia 1, Ciudad de Prueba",
+      "postal_code": "00001",
+      "status": "active"
+    },
+    {
+      "key": "mega",
+      "trade_name": "Mega",
+      "company_name": "Mega Pruebas S.A. de C.V.",
+      "rfc": "MPR010101BB2",
+      "contact_name": "Contacto Mega",
+      "email": "contacto@mega.test",
+      "phone": "5500000002",
+      "full_address": "Calle Ficticia 2, Ciudad de Prueba",
+      "postal_code": "00002",
+      "status": "active"
+    }
+  ],
+  "users": [
+    {
+      "email": "ana@saga.test",
+      "password": "Prueba-Ana-2026",
+      "name": "Ana",
+      "last_name": "Prueba",
+      "status": "active",
+      "memberships": [
+        { "enterprise": "saga", "status": "active" },
+        { "enterprise": "mega", "status": "active" }
+      ],
+      "default_enterprise": "saga"
+    },
+    {
+      "email": "bruno@saga.test",
+      "password": "Prueba-Bruno-2026",
+      "name": "Bruno",
+      "last_name": "Prueba",
+      "status": "active",
+      "memberships": [
+        { "enterprise": "saga", "status": "active" }
+      ],
+      "default_enterprise": "saga"
+    }
+  ]
+}

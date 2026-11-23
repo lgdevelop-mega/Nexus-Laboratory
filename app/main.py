@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.bootstrap import install_login
 from app.core import health
 from app.core.config import Settings, get_settings
 from app.core.db import create_engine, create_sessionmaker, verify_server
@@ -58,4 +59,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(health.router)
+    install_login(app)
     return app

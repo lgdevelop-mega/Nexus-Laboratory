@@ -14,6 +14,8 @@ dependencies = [
     # D-11: asyncmy lo necesita para caching_sha2_password (MySQL 8.4) sin TLS.
     "cryptography>=50.0",
     "alembic>=1.20",
+    # L-02 (login-05): contraseñas con argon2id.
+    "argon2-cffi>=23.1",
 ]
 
 [dependency-groups]
@@ -61,6 +63,9 @@ module = [
     "app.core.*",
     "app.identity.login.domain.*",
     "app.identity.login.application.*",
+    "app.identity.login.api.*",
+    "app.identity.login.cli.*",
+    "app.cli",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
@@ -90,10 +95,11 @@ root_packages = ["app"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "Login: capas api -> application -> domain"
+name = "Login: capas (api | cli) -> application -> domain"
 type = "layers"
 layers = [
-    "app.identity.login.api",
+    # L-04 (login-05): cli es otra capa de entrada, independiente de api.
+    "app.identity.login.api | app.identity.login.cli",
     "app.identity.login.application",
     "app.identity.login.domain",
 ]
@@ -130,7 +136,7 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "Login: la API no importa adaptadores (solo app.bootstrap los conecta)"
+name = "Login: las capas de entrada no importan adaptadores (solo app.bootstrap los conecta)"
 type = "forbidden"
-source_modules = ["app.identity.login.api"]
-forbidden_modules = ["app.identity.login.infrastructure"]
+source_modules = ["app.identity.login.api", "app.identity.login.cli"]
+forbidden_modules = ["app.identity.login.infrastructure", "app.bootstrap"]
